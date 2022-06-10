@@ -12,12 +12,14 @@
 #include "cdrom.h"
 #include "downloadprogress.h"
 #include "mscdex.h"
+#include "networkconfig.h"
 #include "paths.h"
 #include "ui_mainwindow.h"
 
 #include <archive.h>
 #include <archive_entry.h>
 #include <boost/throw_exception.hpp>
+#include <QColorDialog>
 #include <QDesktopServices>
 #include <QFileDialog>
 #include <QMessageBox>
@@ -217,12 +219,30 @@ MainWindow::MainWindow(QWidget* parent)
   ui->dataLocation->setText(QString::fromUtf8(findUserDataDir().value().string().c_str()));
   ui->engineDataLocation->setText(QString::fromLatin1(findEngineDataDir().value().string().c_str()));
 
-  QObject::connect(ui->openDataLocation, &QPushButton::clicked, this, &MainWindow::onOpenDataLocationClicked);
-  QObject::connect(ui->migrateBtn, &QPushButton::clicked, this, &MainWindow::onMigrateClicked);
-  QObject::connect(ui->importBtn, &QPushButton::clicked, this, &MainWindow::onImportClicked);
-  QObject::connect(ui->resetConfig, &QPushButton::clicked, this, &MainWindow::resetConfig);
-  QObject::connect(ui->selectGlidos, &QPushButton::clicked, this, &MainWindow::onSelectGlidosClicked);
-  QObject::connect(ui->disableGlidos, &QPushButton::clicked, this, &MainWindow::onDisableGlidosClicked);
+  connect(ui->openDataLocation, &QPushButton::clicked, this, &MainWindow::onOpenDataLocationClicked);
+  connect(ui->migrateBtn, &QPushButton::clicked, this, &MainWindow::onMigrateClicked);
+  connect(ui->importBtn, &QPushButton::clicked, this, &MainWindow::onImportClicked);
+  connect(ui->resetConfig, &QPushButton::clicked, this, &MainWindow::resetConfig);
+  connect(ui->selectGlidos, &QPushButton::clicked, this, &MainWindow::onSelectGlidosClicked);
+  connect(ui->disableGlidos, &QPushButton::clicked, this, &MainWindow::onDisableGlidosClicked);
+  connect(ui->btnChooseColor, &QPushButton::clicked, this, &MainWindow::onChooseColorClicked);
+
+  if(std::filesystem::is_regular_file(findUserDataDir().value() / "network.yaml"))
+  {
+    auto cfg = NetworkConfig::load();
+
+    m_ghostColor = QColor::fromRgb(cfg.color.at(0), cfg.color.at(1), cfg.color.at(2));
+    ui->serverSocket->setText(QString::fromLatin1(cfg.socket.c_str()));
+  }
+  else
+  {
+    m_ghostColor = QColor::fromRgb(std::rand() % 256, std::rand() % 256, std::rand() % 256);
+  }
+
+  QPalette pal;
+  pal.setColor(QPalette::Window, m_ghostColor);
+  ui->lblColor->setPalette(pal);
+  ui->lblColor->setAutoFillBackground(true);
 }
 
 MainWindow::~MainWindow()
@@ -709,6 +729,12 @@ void MainWindow::onLaunchClicked()
   m_launchRequest = std::tuple<std::string, std::string>{
     std::string{languageIdData.data(), gsl::narrow<size_t>(languageIdData.size())},
     std::string{gameflowIdData.data(), gsl::narrow<size_t>(gameflowIdData.size())}};
+
+  NetworkConfig cfg{};
+  cfg.color = {(uint8_t)m_ghostColor.red(), (uint8_t)m_ghostColor.green(), (uint8_t)m_ghostColor.blue()};
+  cfg.socket = ui->serverSocket->text().toStdString();
+  cfg.save();
+
   close();
 }
 
@@ -735,5 +761,16 @@ void MainWindow::onGameflowSelected(const QModelIndex& index)
   }
 
   ui->gameflowMeta->addStretch(1);
+}
+
+void MainWindow::onChooseColorClicked()
+{
+  if(const auto newColor = QColorDialog::getColor(m_ghostColor, this, tr("Choose Your Ghost Color"));
+     newColor.isValid())
+    m_ghostColor = newColor;
+
+  QPalette pal;
+  pal.setColor(QPalette::Window, m_ghostColor);
+  ui->lblColor->setPalette(pal);
 }
 } // namespace launcher

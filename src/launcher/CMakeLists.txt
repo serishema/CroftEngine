@@ -11,6 +11,8 @@ set(
         downloadprogress.h
         downloadprogress.cpp
         downloadprogress.ui
+        networkconfig.h
+        networkconfig.cpp
 )
 
 set_property(
@@ -67,4 +69,5 @@ target_link_libraries(
         valve-file-vdf::valve-file-vdf
         ryml
         gameflow
+        serialization
 )

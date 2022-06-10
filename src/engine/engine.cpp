@@ -22,6 +22,7 @@
 #include "hid/inputhandler.h"
 #include "loader/trx/trx.h"
 #include "menu/menudisplay.h"
+#include "network/hauntedcoopclient.h"
 #include "objects/laraobject.h"
 #include "player.h"
 #include "presenter.h"
@@ -72,6 +73,7 @@
 #include <iosfwd>
 #include <locale>
 #include <pybind11/eval.h>
+#include <sstream>
 #include <stdexcept>
 #include <system_error>
 #include <utility>
@@ -250,6 +252,9 @@ std::pair<RunResult, std::optional<size_t>> Engine::run(world::World& world, boo
   std::filesystem::create_directories(ghostRoot);
   GhostManager ghostManager{ghostRoot / (world.getLevelFilename().stem().replace_extension(".rec")), world};
 
+  HauntedCoopClient coop{world.getEngine().getGameflowId() + "/" + world.getLevelFilename().stem().string()};
+  coop.start();
+
   while(true)
   {
     ghostManager.model->setVisible(m_engineConfig->displaySettings.ghost);
@@ -350,7 +355,12 @@ std::pair<RunResult, std::optional<size_t>> Engine::run(world::World& world, boo
       continue;
     }
 
-    if(!isCutscene)
+    if(isCutscene)
+    {
+      if(m_presenter->getInputHandler().hasDebouncedAction(hid::Action::Menu) || !world.cinematicLoop())
+        return {RunResult::NextLevel, std::nullopt};
+    }
+    else
     {
       if(world.getObjectManager().getLara().isDead())
       {
@@ -417,20 +427,69 @@ std::pair<RunResult, std::optional<size_t>> Engine::run(world::World& world, boo
           if(room.physicalId == ghostManager.model->getRoomId())
           {
             setParent(gsl::not_null{ghostManager.model}, room.node);
+            break;
           }
+        }
+      }
+
+      {
+        const auto states = coop.getStates();
+        for(const auto& state : states)
+        {
+          const auto ghostId = std::get<0>(state);
+
+          ghosting::GhostFrame f;
+          std::string tmp;
+          const auto& dataVec = std::get<1>(state);
+          for(const auto v : dataVec)
+            tmp += (char)v;
+          std::istringstream stateDataStream{tmp, std::ios::in | std::ios::binary};
+          f.read(stateDataStream);
+
+          auto it = ghostManager.remoteModels.find(ghostId);
+          if(it == ghostManager.remoteModels.end())
+          {
+            it = ghostManager.remoteModels.emplace(ghostId, std::make_shared<ghosting::GhostModel>()).first;
+          }
+          it->second->apply(world, f);
+          gsl_Assert(dataVec.size() >= 3);
+          it->second->setColor(
+            gl::SRGB8(dataVec[dataVec.size() - 3], dataVec[dataVec.size() - 2], dataVec[dataVec.size() - 1]));
+          for(const auto& room : world.getRooms())
+          {
+            if(room.physicalId == it->second->getRoomId())
+            {
+              setParent(gsl::not_null{it->second}, room.node);
+              break;
+            }
+          }
+        }
+
+        std::set<uint64_t> ghostsToDrop;
+        for(const auto& [id, _] : ghostManager.remoteModels)
+          ghostsToDrop.emplace(id);
+        for(const auto& [id, _] : states)
+          ghostsToDrop.erase(id);
+        for(const auto& id : ghostsToDrop)
+        {
+          setParent(gsl::not_null{ghostManager.remoteModels.at(id)}, nullptr);
+          ghostManager.remoteModels.erase(id);
         }
       }
 
       world.getPlayer().timeSpent += 1_frame;
       world.gameLoop(godMode, blackAlpha, ui);
 
-      ghostManager.writer->append(world.getObjectManager().getLara().getGhostFrame());
+      const auto frame = world.getObjectManager().getLara().getGhostFrame();
+
+      std::ostringstream stateDataStream{std::ios::out | std::ios::binary};
+      frame.write(stateDataStream);
+      std::vector<uint8_t> stateData;
+      for(const auto c : stateDataStream.str())
+        stateData.emplace_back(c);
+      coop.sendState(stateData);
+      ghostManager.writer->append(frame);
       world.nextGhostFrame();
-    }
-    else
-    {
-      if(m_presenter->getInputHandler().hasDebouncedAction(hid::Action::Menu) || !world.cinematicLoop())
-        return {RunResult::NextLevel, std::nullopt};
     }
 
     if(m_presenter->getInputHandler().hasDebouncedAction(hid::Action::Screenshot))
@@ -439,6 +498,8 @@ std::pair<RunResult, std::optional<size_t>> Engine::run(world::World& world, boo
       throttler.reset();
     }
   }
+
+  coop.stop();
 }
 
 void Engine::makeScreenshot()

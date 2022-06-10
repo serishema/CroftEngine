@@ -38,6 +38,7 @@ private slots:
   void resetConfig();
   void onLaunchClicked();
   void onGameflowSelected(const QModelIndex& index);
+  void onChooseColorClicked();
 
 private:
   Ui::MainWindow* ui;
@@ -52,5 +53,6 @@ private:
   QStandardItemModel m_languages{};
   QStandardItemModel m_gameflows{};
   std::optional<std::tuple<std::string, std::string>> m_launchRequest = std::nullopt;
+  QColor m_ghostColor;
 };
 } // namespace launcher
